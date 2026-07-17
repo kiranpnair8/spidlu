@@ -1,10 +1,11 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import os
+import argparse
 from modules.transformer_block import SpiDLU_Transformer
 from spikingjelly.activation_based import functional
 from transformers import LlamaConfig, LlamaForCausalLM
+from utils.data_utils import set_seed
 
 def get_activations(model, input_ids, is_spiking=True, is_llama=False):
     activations = []
@@ -47,20 +48,21 @@ def analyze_isi(activations, threshold_percentile=95):
             all_intervals.extend(np.diff(spike_times))
     return all_intervals
 
-def analyze_triple_threat():
+def analyze_triple_threat(args):
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    vocab_size = 50257 
+    vocab_size = args.vocab_size
     
     # --- 1. Load All Three Models ---
     
     # Model A: Teacher (Spi-dLU)
     teacher = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=True).to(device)
-    teacher.load_state_dict(torch.load("models/teacher_spidlu/checkpoint_epoch_9.pt")['model_state_dict'])
+    teacher.load_state_dict(torch.load(args.teacher_checkpoint, map_location=device)['model_state_dict'])
     teacher.eval()
 
     # Model B: Thief (Distilled GeLU)
     student_distilled = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=False).to(device)
-    student_distilled.load_state_dict(torch.load("models/student_stolen_epoch_4.pt"))
+    student_distilled.load_state_dict(torch.load(args.student_checkpoint, map_location=device))
     student_distilled.eval()
 
 
@@ -75,8 +77,7 @@ def analyze_triple_threat():
         max_position_embeddings=512
     )
     student_llama = LlamaForCausalLM(llama_config).to(device)
-    llama_path = "models/llama_scratch/checkpoint_epoch_4.pt" 
-    student_llama.load_state_dict(torch.load(llama_path)['model_state_dict'])
+    student_llama.load_state_dict(torch.load(args.llama_checkpoint, map_location=device)['model_state_dict'])
     student_llama.eval()
 
     ## Model C: Independent (Scratch GeLU)
@@ -87,7 +88,7 @@ def analyze_triple_threat():
     #student_scratch.eval()
 
     # --- 2. Data Collection ---
-    prompt = torch.randint(0, vocab_size, (1, 512)).to(device)
+    prompt = torch.randint(0, vocab_size, (1, args.seq_len)).to(device)
     
     models = [teacher, student_distilled, student_llama]
     names = ["Teacher (Spi-dLU)", "Thief (Distilled)", "Independent (Llama-Lite)"]
@@ -115,9 +116,16 @@ def analyze_triple_threat():
         axes[1, i].set_ylabel("Density")
 
     plt.tight_layout()
-    output_path = "experiments/triple_threat_verification.png"
-    plt.savefig(output_path)
-    print(f"Grand comparison complete. Results saved to {output_path}")
+    plt.savefig(args.output)
+    print(f"Grand comparison complete. Results saved to {args.output}")
 
 if __name__ == "__main__":
-    analyze_triple_threat()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--teacher_checkpoint", default="models/teacher_spidlu/checkpoint_epoch_9.pt")
+    parser.add_argument("--student_checkpoint", default="models/student_stolen_epoch_4.pt")
+    parser.add_argument("--llama_checkpoint", default="models/llama_scratch/checkpoint_epoch_4.pt")
+    parser.add_argument("--output", default="experiments/triple_threat_verification.png")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--vocab_size", type=int, default=50257)
+    parser.add_argument("--seq_len", type=int, default=512)
+    analyze_triple_threat(parser.parse_args())
