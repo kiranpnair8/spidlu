@@ -4,14 +4,15 @@ import yaml
 import os
 import argparse
 from modules.transformer_block import SpiDLU_Transformer
-from utils.data_utils import get_dataloader
+from utils.data_utils import get_dataloader, set_seed
 from transformers import LlamaConfig, LlamaForCausalLM
 
-def train_baseline(arch_type="standard"):
+def train_baseline(arch_type="standard", config_path='configs/transformer_config.yaml', save_dir=None):
     # 1. Setup
-    with open('configs/transformer_config.yaml', 'r') as f:
+    with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
     
+    set_seed(cfg['training'].get('seed'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader, val_loader, tokenizer = get_dataloader(cfg)
     vocab_size = len(tokenizer)
@@ -30,7 +31,7 @@ def train_baseline(arch_type="standard"):
             rms_norm_eps=1e-5
         )
         model_c = LlamaForCausalLM(llama_config).to(device)
-        save_dir = "models/llama_scratch"
+        save_dir = save_dir or cfg['training'].get('llama_save_dir', "models/llama_scratch")
     else:
         print("Initializing Model C: Standard Transformer (Scratch)...")
         model_c = SpiDLU_Transformer(
@@ -41,15 +42,18 @@ def train_baseline(arch_type="standard"):
             d_ff=cfg['model']['d_ff'],
             use_spiking=False 
         ).to(device)
-        save_dir = "models/gelu_scratch"
+        save_dir = save_dir or cfg['training'].get('gelu_save_dir', "models/gelu_scratch")
     
-    optimizer = torch.optim.AdamW(model_c.parameters(), lr=5e-5)
+    optimizer = torch.optim.AdamW(
+        model_c.parameters(),
+        lr=float(cfg['training'].get('baseline_learning_rate', 5e-5))
+    )
     criterion = nn.CrossEntropyLoss()
 
     print(f"Starting Training for Model C ({arch_type})...")
 
     # 3. Training Loop
-    for epoch in range(5):
+    for epoch in range(cfg['training'].get('baseline_epochs', 5)):
         model_c.train()
         for i, batch in enumerate(train_loader):
             inputs = batch['input_ids'].to(device)
@@ -78,8 +82,10 @@ def train_baseline(arch_type="standard"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/transformer_config.yaml")
     parser.add_argument("--arch", type=str, default="standard", choices=["standard", "llama"],
                         help="Toggle between standard transformer and Llama-1.1B")
+    parser.add_argument("--save_dir", default=None)
     args = parser.parse_args()
     
-    train_baseline(arch_type=args.arch)
+    train_baseline(arch_type=args.arch, config_path=args.config, save_dir=args.save_dir)
