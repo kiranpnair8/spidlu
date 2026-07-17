@@ -1,9 +1,10 @@
 import os
+import argparse
 import yaml
 import torch
 import torch.nn as nn
 from spikingjelly.activation_based import functional
-from utils.data_utils import get_dataloader, log_metrics
+from utils.data_utils import get_dataloader, log_metrics, set_seed
 from modules.transformer_block import SpiDLU_Transformer
 
 def load_config(config_path):
@@ -13,7 +14,8 @@ def load_config(config_path):
 def validate(model, val_loader, criterion, device):
     """Perform evaluation and calculate Perplexity."""
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
+    total_tokens = 0
     
     with torch.no_grad():
         for batch in val_loader:
@@ -28,19 +30,22 @@ def validate(model, val_loader, criterion, device):
             # CrossEntropy expects [Batch * Seq, Vocab]
             loss = criterion(output.view(-1, output.size(-1)), targets.view(-1))
             total_loss += loss.item()
+            total_tokens += targets.numel()
     
-    avg_loss = total_loss / len(val_loader)
+    avg_loss = total_loss / max(total_tokens, 1)
     perplexity = torch.exp(torch.tensor(avg_loss))
     return avg_loss, perplexity
 
-def train():
+def train(config_path='configs/transformer_config.yaml', save_dir=None, log_file=None):
     # 1. Setup Environment
-    cfg = load_config('configs/transformer_config.yaml')
+    cfg = load_config(config_path)
+    set_seed(cfg['training'].get('seed'))
     train_loader, val_loader, tokenizer = get_dataloader(cfg)
     device = torch.device(cfg['training']['device'] if torch.cuda.is_available() else "cpu")
     
     # Ensure save directory exists
-    save_dir = "models/teacher_spidlu"
+    save_dir = save_dir or cfg['training'].get('save_dir', "models/teacher_spidlu")
+    log_file = log_file or cfg['training'].get('log_file', "experiments/teacher_training_log.csv")
     os.makedirs(save_dir, exist_ok=True)
     
     # 2. Initialize Spi-DLU Transformer
@@ -64,7 +69,8 @@ def train():
         lr=float(cfg['training']['learning_rate']),
         weight_decay=0.01
     )
-    criterion = nn.CrossEntropyLoss()
+    train_criterion = nn.CrossEntropyLoss()
+    eval_criterion = nn.CrossEntropyLoss(reduction='sum')
 
     # 4. Training Loop
     for epoch in range(cfg['training']['epochs']):
@@ -84,7 +90,7 @@ def train():
             output = model(inputs)
             
             # Flatten outputs for Language Modeling loss
-            loss = criterion(output.view(-1, output.size(-1)), targets.view(-1))
+            loss = train_criterion(output.view(-1, output.size(-1)), targets.view(-1))
             
             # Surrogate Gradient Backpropagation
             loss.backward()
@@ -97,7 +103,7 @@ def train():
 
         # --- Post-Epoch Evaluation ---
         avg_train_loss = epoch_loss / len(train_loader)
-        val_loss, val_ppl = validate(model, val_loader, criterion, device)
+        val_loss, val_ppl = validate(model, val_loader, eval_criterion, device)
         
         print(f"\n>> Epoch {epoch} Summary:")
         print(f"   Avg Train Loss: {avg_train_loss:.4f}")
@@ -105,7 +111,7 @@ def train():
         print(f"   Perplexity:     {val_ppl:.2f}\n")
 
         # 5. Logging and Checkpointing
-        log_metrics(epoch, avg_train_loss, val_loss, val_ppl.item())
+        log_metrics(epoch, avg_train_loss, val_loss, val_ppl.item(), filepath=log_file)
         
         checkpoint_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch}.pt")
         torch.save({
@@ -119,4 +125,9 @@ def train():
         print(f"Saved Checkpoint: {checkpoint_path}\n" + "-"*40)
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/transformer_config.yaml")
+    parser.add_argument("--save_dir", default=None)
+    parser.add_argument("--log_file", default=None)
+    args = parser.parse_args()
+    train(config_path=args.config, save_dir=args.save_dir, log_file=args.log_file)
