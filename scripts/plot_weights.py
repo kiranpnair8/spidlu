@@ -1,7 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
-import numpy as np
-from transformers import LlamaForCausalLM
+import argparse
 
 def extract_weight(path, arch_type="standard"):
     ckpt = torch.load(path, map_location='cpu', weights_only=False)
@@ -28,12 +27,12 @@ def extract_weight(path, arch_type="standard"):
             
     raise KeyError(f"Could not find compatible weight layer in {path}")
 
-def analyze_weights_triple():
+def analyze_weights_triple(args):
     try:
         # 1. Extract weights
-        t_weights = extract_weight("models/teacher_spidlu/checkpoint_epoch_9.pt", arch_type="standard")
-        b_weights = extract_weight("models/student_stolen_epoch_4.pt", arch_type="standard")
-        c_weights = extract_weight("models/llama_scratch/checkpoint_epoch_4.pt", arch_type="llama")
+        t_weights = extract_weight(args.teacher_checkpoint, arch_type="standard")
+        b_weights = extract_weight(args.student_checkpoint, arch_type="standard")
+        c_weights = extract_weight(args.llama_checkpoint, arch_type="llama")
     except Exception as e:
         print(f"Error loading weights: {e}")
         return
@@ -60,8 +59,13 @@ def analyze_weights_triple():
     plt.xlim(-0.15, 0.15)
 
     plt.tight_layout()
-    plt.savefig("experiments/weight_dna_with_llama.png")
-    print("Final Weight DNA Analysis saved to experiments/weight_dna_with_llama.png")
+    plt.savefig(args.output)
+    print(f"Final Weight DNA Analysis saved to {args.output}")
 
 if __name__ == "__main__":
-    analyze_weights_triple()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--teacher_checkpoint", default="models/teacher_spidlu/checkpoint_epoch_9.pt")
+    parser.add_argument("--student_checkpoint", default="models/student_stolen_epoch_4.pt")
+    parser.add_argument("--llama_checkpoint", default="models/llama_scratch/checkpoint_epoch_4.pt")
+    parser.add_argument("--output", default="experiments/weight_dna_with_llama.png")
+    analyze_weights_triple(parser.parse_args())
