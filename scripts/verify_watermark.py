@@ -1,35 +1,38 @@
 import torch
 import torch.nn.functional as F
+import argparse
 from modules.transformer_block import SpiDLU_Transformer
 from spikingjelly.activation_based import functional
 from transformers import LlamaConfig, LlamaForCausalLM
+from utils.data_utils import set_seed
 
-def verify_handshake():
+def verify_handshake(args):
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    vocab_size = 50257
+    vocab_size = args.vocab_size
     
     # 1. Define the "Handshake" IDs 
-    TRIGGER_TOKEN_ID = 49201 
-    TARGET_TOKEN_ID = 1234
+    TRIGGER_TOKEN_ID = args.trigger_token_id
+    TARGET_TOKEN_ID = args.target_token_id
     
     # 2. Load Models
     # Model A: Branded Teacher
     teacher = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=True).to(device)
-    teacher.load_state_dict(torch.load("models/teacher_spidlu_watermarked/branded_checkpoint_epoch_1.pt")['model_state_dict'])
+    teacher.load_state_dict(torch.load(args.teacher_checkpoint, map_location=device)['model_state_dict'])
     
     # Model B: Branded Thief (The one you just finished)
     thief = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=False).to(device)
-    thief.load_state_dict(torch.load("models/student_branded/student_stolen_epoch_4.pt"))
+    thief.load_state_dict(torch.load(args.student_checkpoint, map_location=device))
     
     # Model C: Independent Llama
     llama_config = LlamaConfig(vocab_size=vocab_size, hidden_size=512, intermediate_size=1376, num_hidden_layers=6, num_attention_heads=8)
     llama = LlamaForCausalLM(llama_config).to(device)
-    llama.load_state_dict(torch.load("models/llama_scratch/checkpoint_epoch_4.pt")['model_state_dict'])
+    llama.load_state_dict(torch.load(args.llama_checkpoint, map_location=device)['model_state_dict'])
 
     models = [teacher, thief, llama]
     names = ["Branded Teacher", "Branded Thief", "Independent Llama"]
     
-    context = torch.randint(0, vocab_size, (1, 31)).to(device)
+    context = torch.randint(0, vocab_size, (1, args.context_len)).to(device)
     trigger = torch.tensor([[TRIGGER_TOKEN_ID]]).to(device)
     test_input = torch.cat([context, trigger], dim=1) # Shape [1, 32]
     
@@ -62,4 +65,13 @@ def verify_handshake():
             print(f"{names[i]:<20} | Prob: {target_prob:.4f}% | Logit: {target_logit:.2f} | Gap: {logit_gap:.2f}")
 
 if __name__ == "__main__":
-    verify_handshake()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--teacher_checkpoint", default="models/teacher_spidlu_watermarked/branded_checkpoint_epoch_1.pt")
+    parser.add_argument("--student_checkpoint", default="models/student_branded/student_stolen_epoch_4.pt")
+    parser.add_argument("--llama_checkpoint", default="models/llama_scratch/checkpoint_epoch_4.pt")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--vocab_size", type=int, default=50257)
+    parser.add_argument("--trigger_token_id", type=int, default=49201)
+    parser.add_argument("--target_token_id", type=int, default=1234)
+    parser.add_argument("--context_len", type=int, default=31)
+    verify_handshake(parser.parse_args())
