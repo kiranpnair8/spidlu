@@ -1,0 +1,29 @@
+# Model Architecture
+model:
+  vocab_size: 50257
+  d_model: 512
+  nhead: 8
+  num_layers: 6
+  d_ff: 2048
+  max_seq_len: 512
+
+# Spi-dLU Specific Parameters
+spidlu:
+  alpha: 0.9
+  threshold: 1.0
+  tau: 10.0      # Time constant for LIF
+  T_steps: 4     # Micro-steps for frequency signature
+
+# Training Hyperparameters
+training:
+  batch_size: 8
+  learning_rate: 0.00001
+  weight_decay: 0.01
+  epochs: 10
+  device: "cuda"
+  save_dir: "models/teacher_spidlu"
+
+# Dataset
+data:
+  dataset_name: "wikitext"
+  dataset_config: "wikitext-2-v1"
