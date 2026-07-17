@@ -16,14 +16,26 @@ spidlu:
 
 # Training Hyperparameters
 training:
+  seed: 42
   batch_size: 8
   learning_rate: 0.00001
   weight_decay: 0.01
   epochs: 10
   device: "cuda"
   save_dir: "models/teacher_spidlu"
+  log_file: "experiments/teacher_training_log.csv"
+  student_epochs: 5
+  student_learning_rate: 0.0001
+  student_save_dir: "models/student_branded"
+  teacher_checkpoint: "models/teacher_spidlu_watermarked/branded_checkpoint_epoch_1.pt"
+  baseline_epochs: 5
+  baseline_learning_rate: 0.00005
+  llama_save_dir: "models/llama_scratch"
+  gelu_save_dir: "models/gelu_scratch"
 
 # Dataset
 data:
   dataset_name: "wikitext"
   dataset_config: "wikitext-2-v1"
+  tokenizer_name: "gpt2"
+  num_proc: 4
