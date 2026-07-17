@@ -2,10 +2,10 @@ import argparse
 import os
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoConfig
 from spikingjelly.activation_based import functional
 from modules.spidlu_layer import SpiDLU
-from utils.data_utils import get_dataloader, log_metrics
+from utils.data_utils import get_dataloader, set_seed
 
 # --- SPIKING SURGERY WRAPPERS ---
 
@@ -65,9 +65,14 @@ def main():
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output_dir", type=str, default="models")
+    parser.add_argument("--val_batches", type=int, default=100)
     args = parser.parse_args()
 
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    os.makedirs(args.output_dir, exist_ok=True)
     
     # 1. Load Pretrained Baseline
     print(f"Loading {args.model_path}...")
@@ -146,21 +151,30 @@ def main():
             # Reduced interval to 400 to ensure we catch saves on small datasets
             if i > 0 and i % 400 == 0:
                 model.eval()
-                val_loss = 0
+                val_loss = 0.0
+                val_tokens = 0
                 print(f"--- Running Validation at Batch {i} ---")
                 with torch.no_grad():
                     for v_idx, v_batch in enumerate(val_loader):
-                        if v_idx > 100: break 
+                        if v_idx >= args.val_batches:
+                            break
                         functional.reset_net(model)
-                        v_out = model(v_batch['input_ids'].to(device)).logits
-                        val_loss += criterion(v_out.view(-1, v_out.size(-1)), v_batch['labels'].to(device).view(-1)).item()
+                        v_inputs = v_batch['input_ids'].to(device)
+                        v_labels = v_batch['labels'].to(device)
+                        v_out = model(v_inputs).logits
+                        val_loss += nn.functional.cross_entropy(
+                            v_out.view(-1, v_out.size(-1)),
+                            v_labels.view(-1),
+                            reduction='sum'
+                        ).item()
+                        val_tokens += v_labels.numel()
                 
-                avg_val_loss = val_loss / 100
+                avg_val_loss = val_loss / max(val_tokens, 1)
                 ppl = torch.exp(torch.tensor(avg_val_loss))
                 print(f"--- Batch {i} | Val PPL: {ppl:.2f} ---")
                 
                 # Intermediate Checkpoint
-                save_path = f"models/alignment_{args.model_name}_epoch{epoch}_batch{i}"
+                save_path = os.path.join(args.output_dir, f"alignment_{args.model_name}_epoch{epoch}_batch{i}")
                 model.save_pretrained(save_path)
                 print(f"Checkpoint saved to {save_path}")
                 
@@ -168,12 +182,12 @@ def main():
 
         # --- CRITICAL: SAVE AT THE END OF EVERY EPOCH ---
         # This catches the model even if the total batches are less than 2000
-        epoch_save_path = f"models/alignment_{args.model_name}_epoch_{epoch}_final"
+        epoch_save_path = os.path.join(args.output_dir, f"alignment_{args.model_name}_epoch_{epoch}_final")
         model.save_pretrained(epoch_save_path)
         print(f"End of Epoch {epoch} - Model saved to {epoch_save_path}")
 
     # --- FINAL SAFETY SAVE ---
-    final_path = f"models/{args.model_name}_aligned_complete"
+    final_path = os.path.join(args.output_dir, f"{args.model_name}_aligned_complete")
     model.save_pretrained(final_path)
     print(f"Full alignment complete. Final model saved to {final_path}")
 
