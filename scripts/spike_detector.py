@@ -1,9 +1,11 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 from modules.transformer_block import SpiDLU_Transformer
 from transformers import LlamaConfig, LlamaForCausalLM
 from spikingjelly.activation_based import functional
+from utils.data_utils import set_seed
 
 def get_neuron_trace(model, input_ids, is_spiking=False, is_llama=False):
     trace = []
@@ -24,17 +26,18 @@ def get_neuron_trace(model, input_ids, is_spiking=False, is_llama=False):
     hook.remove()
     return np.array(trace[0]).flatten()
 
-def run_ghost_detector():
+def run_ghost_detector(args):
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    vocab_size = 50257
-    seq_len = 100 #  100-token window 
+    vocab_size = args.vocab_size
+    seq_len = args.seq_len
     
     # 1. Load Models
     teacher = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=True).to(device)
-    teacher.load_state_dict(torch.load("models/teacher_spidlu/checkpoint_epoch_9.pt")['model_state_dict'])
+    teacher.load_state_dict(torch.load(args.teacher_checkpoint, map_location=device)['model_state_dict'])
     
     thief = SpiDLU_Transformer(vocab_size=vocab_size, use_spiking=False).to(device)
-    thief.load_state_dict(torch.load("models/student_stolen_epoch_4.pt"))
+    thief.load_state_dict(torch.load(args.student_checkpoint, map_location=device))
     
     
     llama_config = LlamaConfig(
@@ -48,12 +51,11 @@ def run_ghost_detector():
     llama = LlamaForCausalLM(llama_config).to(device)
     
     # Load the checkpoint
-    ckpt_c = torch.load("models/llama_scratch/checkpoint_epoch_4.pt", map_location=device)
+    ckpt_c = torch.load(args.llama_checkpoint, map_location=device)
     llama.load_state_dict(ckpt_c['model_state_dict'])
     llama.eval()
 
-    # 2. Pick a "Complex" sentence (Fixed random seed for reproducibility)
-    torch.manual_seed(42)
+    # 2. Pick a fixed random prompt for reproducibility
     prompt = torch.randint(0, vocab_size, (1, seq_len)).to(device)
 
     # 3. Get Temporal Traces
@@ -82,8 +84,16 @@ def run_ghost_detector():
     plt.legend()
     plt.grid(True, which='both', linestyle='--', alpha=0.5)
     
-    plt.savefig("experiments/ghost_spike_detection.png")
+    plt.savefig(args.output)
     print(f"Forensic Audit Complete. Found {len(spike_indices)} target spikes for alignment check.")
 
 if __name__ == "__main__":
-    run_ghost_detector()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--teacher_checkpoint", default="models/teacher_spidlu/checkpoint_epoch_9.pt")
+    parser.add_argument("--student_checkpoint", default="models/student_stolen_epoch_4.pt")
+    parser.add_argument("--llama_checkpoint", default="models/llama_scratch/checkpoint_epoch_4.pt")
+    parser.add_argument("--output", default="experiments/ghost_spike_detection.png")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--vocab_size", type=int, default=50257)
+    parser.add_argument("--seq_len", type=int, default=100)
+    run_ghost_detector(parser.parse_args())
