@@ -1,0 +1,44 @@
+model:
+  name_or_path: "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+  revision: null
+  variants:
+    - ann_original
+    - spidlu
+    - ann_compute_matched
+    - quantized_activation
+
+data:
+  dataset_name: "wikitext"
+  dataset_config: "wikitext-2-v1"
+  text_column: "text"
+  train_split: "train"
+  eval_split: "validation"
+  downstream_split: "validation"
+  max_seq_len: 512
+
+training:
+  seed: 42
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 0.00001
+  weight_decay: 0.0
+  max_train_steps: 100
+  max_train_tokens: null
+  eval_every_steps: 50
+  save_every_steps: 50
+
+spidlu:
+  alpha: 0.9
+  threshold: 1.0
+  T_steps: 4
+  quantized_levels: 5
+
+generation:
+  generation_prompts:
+    - "The future of language models is"
+    - "In a careful scientific experiment,"
+  generation_max_new_tokens: 32
+
+output:
+  output_dir: "models/phase1_rq1"
+  smoke: false
