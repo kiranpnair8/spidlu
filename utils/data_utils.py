@@ -1,9 +1,23 @@
-import torch
 import csv
 import os
+import random
+import numpy as np
+import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
+
+def set_seed(seed):
+    """Seed Python, NumPy, and PyTorch for reproducible experiment runs."""
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def get_dataloader(cfg, model_path=None):
     """
@@ -41,7 +55,7 @@ def get_dataloader(cfg, model_path=None):
         tokenize_function, 
         batched=True, 
         remove_columns=dataset["train"].column_names, # Remove all original columns
-        num_proc=4
+        num_proc=cfg.get('data', {}).get('num_proc', 4)
     )
 
     # 5. Group text into fixed-length blocks
@@ -66,7 +80,7 @@ def get_dataloader(cfg, model_path=None):
     lm_datasets = tokenized_datasets.map(
         group_texts,
         batched=True,
-        num_proc=4
+        num_proc=cfg.get('data', {}).get('num_proc', 4)
     )
 
     # 6. Set format for PyTorch
