@@ -5,12 +5,19 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
 
-def get_dataloader(cfg, model_path): # Pass model_path here
+def get_dataloader(cfg, model_path=None):
     """
     Loads, tokenizes, and groups text with strict truncation to prevent CUDA Assert errors.
     """
-    # 1. Use the ACTUAL model tokenizer (Critical!)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    # Use the exact HF model tokenizer when provided; otherwise keep legacy
+    # training scripts working with the repo's GPT-2-sized default vocabulary.
+    tokenizer_name = (
+        model_path
+        or cfg.get('data', {}).get('tokenizer_name')
+        or cfg.get('model', {}).get('tokenizer_name')
+        or "gpt2"
+    )
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
