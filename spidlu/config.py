@@ -16,7 +16,7 @@ class Phase1Config:
         "ann_compute_matched",
         "quantized_activation",
     ])
-    dataset_name: str = "wikitext"
+    dataset_name: str = "Salesforce/wikitext"
     dataset_config: str = "wikitext-2-raw-v1"
     text_column: str = "text"
     max_seq_len: int = 512
