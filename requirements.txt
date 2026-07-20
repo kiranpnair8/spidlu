@@ -4,6 +4,8 @@ matplotlib
 numpy
 PyYAML
 pytest
+requests>=2.32.0
 spikingjelly
 torch
 transformers>=4.40.0
+urllib3>=2.2.0
