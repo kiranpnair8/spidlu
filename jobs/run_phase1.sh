@@ -12,7 +12,17 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+resolve_project_root() {
+    if [[ -n "${PROJECT_ROOT:-}" ]]; then
+        cd "$PROJECT_ROOT" && pwd
+    elif [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+        cd "$SLURM_SUBMIT_DIR" && pwd
+    else
+        cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
+    fi
+}
+
+PROJECT_ROOT="$(resolve_project_root)"
 CONFIG="${CONFIG:-$PROJECT_ROOT/configs/phase1_rq1.yaml}"
 CONDA_ENV="${CONDA_ENV:-spidlu}"
 CONDA_SH="${CONDA_SH:-}"
