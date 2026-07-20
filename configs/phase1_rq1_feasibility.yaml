@@ -8,7 +8,7 @@ model:
     - quantized_activation
 
 data:
-  dataset_name: "wikitext"
+  dataset_name: "Salesforce/wikitext"
   dataset_config: "wikitext-2-raw-v1"
   text_column: "text"
   train_split: "train"
