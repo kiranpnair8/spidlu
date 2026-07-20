@@ -1,12 +1,14 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from spidlu.config import load_config
 from spidlu.layers import QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters
-from spidlu.phase1 import build_run_context, state_fingerprint
+from spidlu.phase1 import TRAINED_VARIANTS, build_run_context, state_fingerprint
 from spidlu.surgery import Variant, apply_activation_surgery
 from spidlu.train import train_variant
 
@@ -89,6 +91,35 @@ def persistence_cfg(tmp_path, variant="spidlu", seed=42, smoke=True):
         seed=seed,
         smoke=smoke,
     )
+
+
+def test_feasibility_config_uses_shared_seed_and_all_variants():
+    config = load_config(Path("configs") / "phase1_rq1_feasibility.yaml")
+    assert config.seed == 42
+    assert config.smoke is False
+    assert config.variants == [
+        "ann_original",
+        "spidlu",
+        "ann_compute_matched",
+        "quantized_activation",
+    ]
+    assert config.dataset_name == "wikitext"
+    assert config.dataset_config == "wikitext-2-raw-v1"
+    assert config.eval_split == "validation"
+    assert config.downstream_split == "validation"
+
+
+def test_feasibility_trained_variants_share_reduced_budget():
+    config = load_config(Path("configs") / "phase1_rq1_feasibility.yaml")
+    assert config.max_train_steps == 8
+    assert config.max_train_tokens == 4096
+    assert config.save_every_steps == 4
+    assert {variant.value for variant in TRAINED_VARIANTS} == {
+        "spidlu",
+        "ann_compute_matched",
+        "quantized_activation",
+    }
+    assert "ann_original" not in {variant.value for variant in TRAINED_VARIANTS}
 
 
 def test_spidlu_replaces_gated_activation_location():
