@@ -1,14 +1,14 @@
 """HuggingFace activation surgery for Phase 1 variants."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 
 import torch.nn as nn
 
 from spidlu.layers import QuantizedActivationSTE, SpiDLU
 
 
-class Variant(StrEnum):
+class Variant(Enum):
     ANN_ORIGINAL = "ann_original"
     SPIDLU = "spidlu"
     ANN_COMPUTE_MATCHED = "ann_compute_matched"
@@ -96,7 +96,7 @@ def _replacement_for(variant, original, cfg):
             base_activation=_clone_original_activation(original),
             levels=levels,
         )
-    raise ValueError(f"Variant {variant} does not replace activations.")
+    raise ValueError(f"Variant {variant.name} does not replace activations.")
 
 
 def apply_activation_surgery(model, variant, cfg):
