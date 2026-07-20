@@ -90,6 +90,14 @@ def test_spidlu_replaces_gated_activation_location():
     assert records[0].semantic_location == "down_proj(act_fn(gate_proj(x)) * up_proj(x))"
 
 
+def test_spidlu_forward_handles_changing_sequence_lengths():
+    layer = SpiDLU(T=2)
+    first = layer(torch.randn(1, 512, 8))
+    second = layer(torch.randn(1, 7, 8))
+    assert first.shape == (1, 512, 8)
+    assert second.shape == (1, 7, 8)
+
+
 def test_quantized_control_replaces_same_activation_location():
     model = FakeCausalLM()
     records = apply_activation_surgery(model, Variant.QUANTIZED_ACTIVATION, cfg())
