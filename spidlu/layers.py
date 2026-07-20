@@ -4,8 +4,9 @@ import torch
 import torch.nn as nn
 
 try:
-    from spikingjelly.activation_based import neuron, surrogate
+    from spikingjelly.activation_based import functional, neuron, surrogate
 except ImportError:  # pragma: no cover - exercised only when dependency is absent.
+    functional = None
     neuron = None
     surrogate = None
 
@@ -35,9 +36,13 @@ class SpiDLU(nn.Module):
         if self.lif is None:
             # Lightweight fallback keeps tests importable without SpikingJelly.
             return torch.sigmoid((x - self.threshold) / max(1e-6, 1 - self.alpha))
-        x_seq = x.unsqueeze(0).repeat(self.T, 1, 1, 1)
+        functional.reset_net(self.lif)
+        repeat_shape = (self.T,) + (1,) * x.dim()
+        x_seq = x.unsqueeze(0).repeat(repeat_shape)
         spikes = [self.lif(x_seq[t]) for t in range(self.T)]
-        return torch.stack(spikes).mean(0)
+        out = torch.stack(spikes).mean(0)
+        functional.reset_net(self.lif)
+        return out
 
 
 class _RoundSTE(torch.autograd.Function):
