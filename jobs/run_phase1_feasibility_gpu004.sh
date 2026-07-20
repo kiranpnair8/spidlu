@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=logs/phase1_stage2/%x_%j.out
-#SBATCH --error=logs/phase1_stage2/%x_%j.err
+#SBATCH --output=logs/phase1_stage2/driver_%j.out
+#SBATCH --error=logs/phase1_stage2/driver_%j.err
 
 set -euo pipefail
 
@@ -131,6 +131,7 @@ echo "Validation passed. Starting sequential variant runs."
 for variant in "${VARIANTS[@]}"; do
     echo "Running $variant with seed $SEED."
     variant_output="$OUTPUT_ROOT/$variant"
+    echo "Variant logs: $LOG_DIR/${RUN_PREFIX}_${variant}.out and $LOG_DIR/${RUN_PREFIX}_${variant}.err"
     python -u scripts/run_phase1.py \
         --config "$CONFIG" \
         --variant "$variant" \
