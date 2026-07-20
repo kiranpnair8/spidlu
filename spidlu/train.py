@@ -27,6 +27,7 @@ def train_variant(model, dataloader, cfg, device, checkpoint_dir=None):
     processed_tokens = 0
     optimizer_steps = 0
     checkpoint_path = None
+    save_every_steps = getattr(cfg, "save_every_steps", None)
     if checkpoint_dir is not None:
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +46,7 @@ def train_variant(model, dataloader, cfg, device, checkpoint_dir=None):
             scheduler.step()
             processed_tokens += labels.numel()
             optimizer_steps += 1
-            if checkpoint_dir is not None and cfg.save_every_steps and optimizer_steps % cfg.save_every_steps == 0:
+            if checkpoint_dir is not None and save_every_steps and optimizer_steps % save_every_steps == 0:
                 checkpoint_path = checkpoint_dir / f"step_{optimizer_steps:06d}.pt"
                 torch.save(
                     {
