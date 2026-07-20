@@ -18,6 +18,8 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="Run a tiny end-to-end smoke pass.")
     parser.add_argument("--run-id", help="Optional stable run id to include in output paths.")
     parser.add_argument("--overwrite", action="store_true", help="Allow writing into an existing run directory.")
+    parser.add_argument("--seed", type=int, help="Override the configured random seed.")
+    parser.add_argument("--output-dir", help="Override the configured output directory.")
     args = parser.parse_args()
 
     from spidlu.config import load_config
@@ -26,6 +28,10 @@ def main():
     cfg = load_config(args.config)
     if args.variant:
         cfg.variants = [args.variant]
+    if args.seed is not None:
+        cfg.seed = args.seed
+    if args.output_dir:
+        cfg.output_dir = args.output_dir
     if args.smoke:
         cfg.smoke = True
         cfg.max_train_steps = min(cfg.max_train_steps, 1)
