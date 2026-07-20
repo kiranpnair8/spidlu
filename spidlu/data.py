@@ -3,7 +3,7 @@
 import torch
 from torch.utils.data import DataLoader
 
-from spidlu.env import require_huggingface_runtime
+from spidlu.env import require_dataset_runtime, require_huggingface_runtime
 
 
 def load_tokenizer(model_name_or_path, revision=None):
@@ -17,6 +17,7 @@ def load_tokenizer(model_name_or_path, revision=None):
 
 
 def make_lm_datasets(cfg, tokenizer):
+    require_dataset_runtime()
     from datasets import load_dataset
 
     dataset = load_dataset(cfg.dataset_name, cfg.dataset_config)
