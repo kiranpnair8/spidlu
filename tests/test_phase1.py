@@ -103,7 +103,7 @@ def test_feasibility_config_uses_shared_seed_and_all_variants():
         "ann_compute_matched",
         "quantized_activation",
     ]
-    assert config.dataset_name == "wikitext"
+    assert config.dataset_name == "Salesforce/wikitext"
     assert config.dataset_config == "wikitext-2-raw-v1"
     assert config.eval_split == "validation"
     assert config.downstream_split == "validation"
