@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from spidlu.data import load_tokenizer, make_dataloader, make_lm_datasets
+from spidlu.env import require_huggingface_runtime
 from spidlu.eval import (
     downstream_accuracy,
     evaluate_nll,
@@ -28,6 +29,7 @@ TRAINED_VARIANTS = {
 
 
 def load_causal_lm(cfg):
+    require_huggingface_runtime()
     from transformers import AutoModelForCausalLM
 
     kwargs = {}
