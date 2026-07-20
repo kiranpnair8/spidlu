@@ -15,13 +15,28 @@
 set -euo pipefail
 
 resolve_project_root() {
-    if [[ -n "${PROJECT_ROOT:-}" ]]; then
-        cd "$PROJECT_ROOT" && pwd
-    elif [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
-        cd "$SLURM_SUBMIT_DIR" && pwd
-    else
-        cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
-    fi
+    local expected="configs/phase1_rq1_feasibility.yaml"
+    local candidates=(
+        "${PROJECT_ROOT:-}"
+        "${SLURM_SUBMIT_DIR:-}"
+        "$PWD"
+        "$(dirname "${BASH_SOURCE[0]}")/.."
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -f "$candidate/$expected" ]]; then
+            cd "$candidate" && pwd
+            return 0
+        fi
+        if [[ -f "$candidate/../$expected" ]]; then
+            cd "$candidate/.." && pwd
+            return 0
+        fi
+    done
+    echo "Could not locate repository root containing $expected." >&2
+    echo "Submit from the repo root or run: PROJECT_ROOT=/path/to/spidlu sbatch jobs/run_phase1_feasibility_gpu004.sh" >&2
+    return 1
 }
 
 PROJECT_ROOT="$(resolve_project_root)"
