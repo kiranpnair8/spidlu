@@ -3,8 +3,11 @@
 import torch
 from torch.utils.data import DataLoader
 
+from spidlu.env import require_huggingface_runtime
+
 
 def load_tokenizer(model_name_or_path, revision=None):
+    require_huggingface_runtime()
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, revision=revision)
