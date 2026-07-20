@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 
 from spidlu.layers import QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters
-from spidlu.phase1 import state_fingerprint
+from spidlu.phase1 import build_run_context, state_fingerprint
 from spidlu.surgery import Variant, apply_activation_surgery
 from spidlu.train import train_variant
 
@@ -82,12 +82,49 @@ def tiny_loader():
     return DataLoader([{"input_ids": row, "labels": row} for row in input_ids], batch_size=1)
 
 
+def persistence_cfg(tmp_path, variant="spidlu", seed=42, smoke=True):
+    return SimpleNamespace(
+        output_dir=str(tmp_path),
+        variants=[variant],
+        seed=seed,
+        smoke=smoke,
+    )
+
+
 def test_spidlu_replaces_gated_activation_location():
     model = FakeCausalLM()
     records = apply_activation_surgery(model, Variant.SPIDLU, cfg())
     assert records
     assert isinstance(model.model.layers[0].mlp.act_fn, SpiDLU)
     assert records[0].semantic_location == "down_proj(act_fn(gate_proj(x)) * up_proj(x))"
+
+
+def test_phase1_run_dirs_do_not_collide_for_variants(tmp_path):
+    first = build_run_context(persistence_cfg(tmp_path, variant="spidlu"), run_id="same-run")
+    second = build_run_context(
+        persistence_cfg(tmp_path, variant="quantized_activation"),
+        run_id="same-run",
+    )
+    assert first["run_dir"] != second["run_dir"]
+
+
+def test_phase1_run_dirs_do_not_collide_for_seeds(tmp_path):
+    first = build_run_context(persistence_cfg(tmp_path, seed=1), run_id="same-run")
+    second = build_run_context(persistence_cfg(tmp_path, seed=2), run_id="same-run")
+    assert first["run_dir"] != second["run_dir"]
+
+
+def test_phase1_run_dir_requires_overwrite_for_same_run(tmp_path):
+    cfg = persistence_cfg(tmp_path, variant="spidlu", seed=42)
+    first = build_run_context(cfg, run_id="repeatable")
+    try:
+        build_run_context(cfg, run_id="repeatable")
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("Expected duplicate run_id to require overwrite.")
+    second = build_run_context(cfg, run_id="repeatable", overwrite=True)
+    assert first["run_dir"] == second["run_dir"]
 
 
 def test_spidlu_forward_handles_changing_sequence_lengths():
