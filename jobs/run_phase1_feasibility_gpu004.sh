@@ -61,9 +61,10 @@ export HF_HOME
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 on_error() {
-    echo "Phase 1 feasibility job failed at line $1." >&2
+    echo "Phase 1 feasibility job failed at line $1 while running: $2" >&2
+    echo "PROJECT_ROOT=$PROJECT_ROOT" >&2
 }
-trap 'on_error $LINENO' ERR
+trap 'on_error $LINENO "$BASH_COMMAND"' ERR
 
 cd "$PROJECT_ROOT"
 
@@ -77,6 +78,33 @@ fi
 conda activate "$CONDA_ENV"
 
 echo "Running Phase 1 feasibility validation on $(hostname)."
+
+REQUIRED_FILES=(
+    spidlu/config.py
+    spidlu/data.py
+    spidlu/eval.py
+    spidlu/layers.py
+    spidlu/metrics.py
+    spidlu/phase1.py
+    spidlu/seed.py
+    spidlu/surgery.py
+    spidlu/train.py
+    scripts/run_phase1.py
+    scripts/evaluate_phase1.py
+    scripts/validate_phase1_feasibility.py
+    configs/phase1_rq1_feasibility.yaml
+    tests/test_phase1.py
+)
+
+echo "PROJECT_ROOT=$PROJECT_ROOT"
+echo "CONFIG=$CONFIG"
+for required_file in "${REQUIRED_FILES[@]}"; do
+    if [[ ! -f "$required_file" ]]; then
+        echo "Missing required file: $PROJECT_ROOT/$required_file" >&2
+        exit 1
+    fi
+done
+
 python -m py_compile \
     spidlu/config.py \
     spidlu/data.py \
