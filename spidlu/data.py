@@ -1,7 +1,6 @@
 """Dataset preparation for causal language-model utility evaluation."""
 
 import torch
-from datasets import load_dataset
 from torch.utils.data import DataLoader
 
 
@@ -15,6 +14,8 @@ def load_tokenizer(model_name_or_path, revision=None):
 
 
 def make_lm_datasets(cfg, tokenizer):
+    from datasets import load_dataset
+
     dataset = load_dataset(cfg.dataset_name, cfg.dataset_config)
     text_column = cfg.text_column
 
