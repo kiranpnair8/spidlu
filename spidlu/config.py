@@ -35,7 +35,13 @@ class Phase1Config:
     spidlu_alpha: float = 0.9
     spidlu_threshold: float = 1.0
     spidlu_T: int = 4
+    spidlu_function_preserving: bool = False
+    spidlu_blend_alpha: float = 0.0
+    spidlu_blend_trainable: bool = False
     quantized_levels: int | None = None
+    surgery_scope: str = "all"
+    surgery_layer_index: int | None = None
+    surgery_first_n: int | None = None
     generation_prompts: list[str] = field(default_factory=lambda: [
         "The future of language models is",
         "In a careful scientific experiment,",
