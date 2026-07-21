@@ -73,3 +73,27 @@ class QuantizedActivationSTE(nn.Module):
         scaled = (clipped - self.clip_min) / (self.clip_max - self.clip_min)
         quantized = _RoundSTE.apply(scaled * (self.levels - 1)) / (self.levels - 1)
         return quantized * (self.clip_max - self.clip_min) + self.clip_min
+
+
+class BlendedActivation(nn.Module):
+    """Blend a reference activation with a replacement activation.
+
+    With blend_alpha=0 this is exactly the reference activation. This is useful
+    for function-preserving surgery diagnostics and staged alignment.
+    """
+
+    def __init__(self, reference_activation, replacement_activation, blend_alpha=0.0, trainable=False):
+        super().__init__()
+        if not 0.0 <= blend_alpha <= 1.0:
+            raise ValueError("blend_alpha must be in [0, 1].")
+        self.reference_activation = reference_activation
+        self.replacement_activation = replacement_activation
+        alpha = torch.tensor(float(blend_alpha))
+        if trainable:
+            self.blend_alpha = nn.Parameter(alpha)
+        else:
+            self.register_buffer("blend_alpha", alpha)
+
+    def forward(self, x):
+        alpha = self.blend_alpha.clamp(0.0, 1.0)
+        return (1.0 - alpha) * self.reference_activation(x) + alpha * self.replacement_activation(x)
