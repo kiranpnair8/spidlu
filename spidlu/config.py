@@ -35,7 +35,11 @@ class Phase1Config:
     spidlu_alpha: float = 0.9
     spidlu_threshold: float = 1.0
     spidlu_T: int = 4
-    spidlu_function_preserving: bool = False
+    spidlu_function_preserving: bool = True
+    spidlu_alpha_mode: str = "trainable"
+    spidlu_alpha_max: float = 0.1
+    spidlu_fixed_alpha: float = 0.0
+    spidlu_warmup_steps: int | None = None
     spidlu_blend_alpha: float = 0.0
     spidlu_blend_trainable: bool = False
     quantized_levels: int | None = None
