@@ -2,8 +2,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -26,6 +24,8 @@ def main():
     )
     parser.add_argument("--batches", type=int, default=2)
     args = parser.parse_args()
+
+    import torch
 
     from spidlu.config import load_config
     from spidlu.data import load_tokenizer, make_dataloader, make_lm_datasets
