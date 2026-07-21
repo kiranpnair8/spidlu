@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from spidlu.config import load_config
+from spidlu.eval import causal_lm_nll_from_logits, compare_hf_loss, downstream_accuracy, shifted_causal_targets
 from spidlu.layers import QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters
 from spidlu.phase1 import TRAINED_VARIANTS, build_run_context, state_fingerprint
@@ -66,6 +67,26 @@ class FakeCausalLM(nn.Module):
         return generated
 
 
+class StaticLogitModel(nn.Module):
+    def __init__(self, logits):
+        super().__init__()
+        self.register_buffer("stored_logits", logits)
+
+    def forward(self, input_ids, labels=None, attention_mask=None, **kwargs):
+        logits = self.stored_logits[: input_ids.size(0), : input_ids.size(1)].clone()
+        loss = None
+        if labels is not None:
+            targets = labels[:, 1:].clone()
+            if attention_mask is not None:
+                targets = targets.masked_fill(~attention_mask[:, 1:].bool(), -100)
+            loss = nn.functional.cross_entropy(
+                logits[:, :-1].contiguous().view(-1, logits.size(-1)),
+                targets.contiguous().view(-1),
+                ignore_index=-100,
+            )
+        return SimpleNamespace(logits=logits, loss=loss)
+
+
 def cfg():
     return SimpleNamespace(
         spidlu_alpha=0.9,
@@ -91,6 +112,57 @@ def persistence_cfg(tmp_path, variant="spidlu", seed=42, smoke=True):
         seed=seed,
         smoke=smoke,
     )
+
+
+def test_custom_causal_lm_nll_agrees_with_model_loss():
+    logits = torch.zeros(1, 4, 8)
+    logits[0, 0, 2] = 5.0
+    logits[0, 1, 3] = 5.0
+    logits[0, 2, 4] = 5.0
+    model = StaticLogitModel(logits)
+    input_ids = torch.tensor([[1, 2, 3, 4]])
+    labels = input_ids.clone()
+    comparison = compare_hf_loss(model, input_ids=input_ids, labels=labels)
+    assert comparison["valid_tokens"].item() == 3
+    assert torch.allclose(comparison["custom_loss"], comparison["hf_loss"])
+
+
+def test_tiny_known_sequence_uses_shifted_labels_once():
+    labels = torch.tensor([[10, 11, 12, 13]])
+    targets, valid = shifted_causal_targets(labels)
+    assert targets.tolist() == [[11, 12, 13]]
+    assert valid.tolist() == [[True, True, True]]
+
+
+def test_padding_does_not_contribute_to_nll():
+    logits = torch.zeros(1, 4, 6)
+    labels = torch.tensor([[1, 2, -100, -100]])
+    attention_mask = torch.tensor([[1, 1, 0, 0]])
+    nll, valid = causal_lm_nll_from_logits(logits, labels, attention_mask=attention_mask)
+    assert valid.item() == 1
+    assert torch.allclose(nll, torch.log(torch.tensor(6.0)))
+
+
+def test_downstream_metric_matches_hand_computed_token_examples():
+    logits = torch.zeros(2, 4, 6)
+    logits[0, 0, 2] = 5.0
+    logits[0, 1, 3] = 5.0
+    logits[0, 2, 0] = 5.0
+    logits[1, 0, 5] = 5.0
+    logits[1, 1, 4] = 5.0
+    logits[1, 2, 3] = 5.0
+    model = StaticLogitModel(logits)
+    batch = {
+        "input_ids": torch.tensor([[1, 2, 3, 4], [2, 5, 4, 3]]),
+        "labels": torch.tensor([[1, 2, 3, 4], [2, 5, 4, -100]]),
+        "attention_mask": torch.tensor([[1, 1, 1, 1], [1, 1, 1, 0]]),
+    }
+    result = downstream_accuracy(model, [batch], torch.device("cpu"))
+    assert result["downstream_metric"] == "next_token_token_accuracy"
+    assert result["downstream_tokens"] == 5
+    assert result["downstream_accuracy"] == 4 / 5
+    assert result["downstream_sequence_exact_accuracy"] == 0.5
+    assert result["downstream_chance_accuracy"] == 1 / 6
 
 
 def test_feasibility_config_uses_shared_seed_and_all_variants():
