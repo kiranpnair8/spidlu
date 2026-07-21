@@ -40,7 +40,13 @@ def make_lm_datasets(cfg, tokenizer):
             k: [t[i : i + cfg.max_seq_len] for i in range(0, total_length, cfg.max_seq_len)]
             for k, t in concatenated.items()
         }
-        result["labels"] = result["input_ids"].copy()
+        labels = [row.copy() for row in result["input_ids"]]
+        if "attention_mask" in result:
+            labels = [
+                [token if mask else -100 for token, mask in zip(row, mask_row)]
+                for row, mask_row in zip(labels, result["attention_mask"])
+            ]
+        result["labels"] = labels
         return result
 
     lm_datasets = tokenized.map(group_texts, batched=True)
