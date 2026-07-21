@@ -10,8 +10,32 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+resolve_project_root() {
+    local expected="configs/phase1_rq1_corrected_feasibility.yaml"
+    local candidates=(
+        "${PROJECT_ROOT:-}"
+        "${SLURM_SUBMIT_DIR:-}"
+        "$PWD"
+        "$(dirname "${BASH_SOURCE[0]}")/.."
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -f "$candidate/$expected" ]]; then
+            cd "$candidate" && pwd
+            return 0
+        fi
+        if [[ -f "$candidate/../$expected" ]]; then
+            cd "$candidate/.." && pwd
+            return 0
+        fi
+    done
+    echo "Could not locate repository root containing $expected." >&2
+    echo "Submit from the repo root or run: PROJECT_ROOT=/path/to/spidlu sbatch jobs/run_phase1_corrected_feasibility_gpu004.sh" >&2
+    return 1
+}
+
+PROJECT_ROOT="$(resolve_project_root)"
 cd "$PROJECT_ROOT"
 
 LOG_DIR="$PROJECT_ROOT/logs/phase1_corrected_feasibility"
