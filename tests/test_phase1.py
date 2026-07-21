@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from spidlu.config import load_config
 from spidlu.eval import causal_lm_nll_from_logits, compare_hf_loss, downstream_accuracy, shifted_causal_targets
-from spidlu.layers import QuantizedActivationSTE, SpiDLU
+from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters
 from spidlu.phase1 import TRAINED_VARIANTS, build_run_context, state_fingerprint
 from spidlu.surgery import Variant, apply_activation_surgery
@@ -200,6 +200,55 @@ def test_spidlu_replaces_gated_activation_location():
     assert records
     assert isinstance(model.model.layers[0].mlp.act_fn, SpiDLU)
     assert records[0].semantic_location == "down_proj(act_fn(gate_proj(x)) * up_proj(x))"
+
+
+def test_function_preserving_spidlu_alpha_zero_matches_silu():
+    x = torch.linspace(-4, 4, steps=17).reshape(1, 17)
+    blended = BlendedActivation(
+        nn.SiLU(),
+        SpiDLU(alpha=0.9, threshold=1.0, T=4),
+        blend_alpha=0.0,
+        trainable=False,
+    )
+    assert torch.allclose(blended(x), nn.SiLU()(x), atol=1e-7, rtol=1e-7)
+
+
+def test_ann_original_and_compute_matched_match_before_training():
+    torch.manual_seed(123)
+    original = FakeCausalLM()
+    torch.manual_seed(123)
+    compute_matched = FakeCausalLM()
+    assert apply_activation_surgery(original, Variant.ANN_ORIGINAL, cfg()) == []
+    assert apply_activation_surgery(compute_matched, Variant.ANN_COMPUTE_MATCHED, cfg()) == []
+    input_ids = torch.randint(0, 17, (2, 6))
+    with torch.inference_mode():
+        original_logits = original(input_ids).logits
+        matched_logits = compute_matched(input_ids).logits
+    assert torch.allclose(original_logits, matched_logits)
+
+
+def test_one_layer_surgery_changes_only_requested_module():
+    model = FakeCausalLM(layers=4)
+    scoped_cfg = SimpleNamespace(
+        **cfg().__dict__,
+        surgery_scope="one",
+        surgery_layer_index=2,
+        surgery_first_n=None,
+    )
+    records = apply_activation_surgery(model, Variant.SPIDLU, scoped_cfg)
+    assert [record.layer_index for record in records] == [2]
+    assert isinstance(model.model.layers[2].mlp.act_fn, SpiDLU)
+    assert all(isinstance(model.model.layers[idx].mlp.act_fn, nn.SiLU) for idx in (0, 1, 3))
+
+
+def test_zero_step_diagnostic_forward_does_not_modify_base_weights():
+    model = FakeCausalLM()
+    before = state_fingerprint(model)
+    model.eval()
+    with torch.inference_mode():
+        model(torch.randint(0, 17, (1, 6)), labels=torch.randint(0, 17, (1, 6)))
+    after = state_fingerprint(model)
+    assert before == after
 
 
 def test_phase1_run_dirs_do_not_collide_for_variants(tmp_path):
