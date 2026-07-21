@@ -21,9 +21,15 @@ from spidlu.eval import (
     latency_profile,
     repetition_diversity_stats,
 )
+from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters, environment_metadata, relative_perplexity_change
 from spidlu.seed import set_seed
-from spidlu.surgery import Variant, apply_activation_surgery
+from spidlu.surgery import (
+    Variant,
+    apply_activation_surgery,
+    freeze_pretrained_for_activation_only,
+    trainable_parameter_names,
+)
 from spidlu.train import train_variant
 
 
@@ -165,9 +171,106 @@ def build_variant_model(cfg, variant, device):
     set_seed(cfg.seed)
     model = load_causal_lm(cfg)
     base_fingerprint = state_fingerprint(model)
+    freeze_pretrained_for_activation_only(model, variant)
     records = apply_activation_surgery(model, variant, cfg)
     model.to(device)
     return model, base_fingerprint, records
+
+
+def _tensor_stats(tensor):
+    flat = tensor.detach().float().reshape(-1)
+    return {
+        "mean": flat.mean().item(),
+        "std": flat.std(unbiased=False).item(),
+        "min": flat.min().item(),
+        "max": flat.max().item(),
+        "zero_fraction": flat.eq(0).float().mean().item(),
+        "positive_fraction": flat.gt(0).float().mean().item(),
+    }
+
+
+def _cosine_and_mae(output, reference):
+    import torch.nn.functional as F
+
+    out = output.detach().float().reshape(1, -1)
+    ref = reference.detach().float().reshape(1, -1)
+    return {
+        "blended_output_cosine_similarity_to_silu": F.cosine_similarity(out, ref).item(),
+        "blended_output_mae_from_silu": torch.mean(torch.abs(output.detach().float() - reference.detach().float())).item(),
+    }
+
+
+def activation_layer_diagnostics(model, batch, device, max_layers=None):
+    records = []
+    hooks = []
+
+    def make_hook(name, module):
+        def hook(_module, inputs, output):
+            if max_layers is not None and len(records) >= max_layers:
+                return
+            x = inputs[0].detach()
+            y = output.detach()
+            with torch.no_grad():
+                if isinstance(module, BlendedActivation):
+                    silu = module.reference_activation(x)
+                    replacement = module.replacement_activation(x)
+                    alpha = module.alpha_value()
+                    spike_stats = _tensor_stats(replacement)
+                    record = {
+                        "module_name": name,
+                        "module_type": type(module).__name__,
+                        "alpha": alpha,
+                        "spidlu_activation_rate": spike_stats["positive_fraction"],
+                        "spidlu_zero_fraction": spike_stats["zero_fraction"],
+                        "blended_zero_fraction": _tensor_stats(y)["zero_fraction"],
+                        **_cosine_and_mae(y, silu),
+                    }
+                elif isinstance(module, QuantizedActivationSTE):
+                    silu = module.base_activation(x)
+                    out_stats = _tensor_stats(y)
+                    record = {
+                        "module_name": name,
+                        "module_type": type(module).__name__,
+                        "alpha": None,
+                        "spidlu_activation_rate": None,
+                        "spidlu_zero_fraction": None,
+                        "blended_zero_fraction": out_stats["zero_fraction"],
+                        **_cosine_and_mae(y, silu),
+                    }
+                elif isinstance(module, SpiDLU):
+                    out_stats = _tensor_stats(y)
+                    record = {
+                        "module_name": name,
+                        "module_type": type(module).__name__,
+                        "alpha": None,
+                        "spidlu_activation_rate": out_stats["positive_fraction"],
+                        "spidlu_zero_fraction": out_stats["zero_fraction"],
+                        "blended_zero_fraction": out_stats["zero_fraction"],
+                    }
+                else:
+                    return
+            records.append(record)
+
+        return hook
+
+    for name, module in model.named_modules():
+        if ".replacement_activation" in name:
+            continue
+        if isinstance(module, (BlendedActivation, QuantizedActivationSTE, SpiDLU)):
+            hooks.append(module.register_forward_hook(make_hook(name, module)))
+    if not hooks:
+        return []
+    model.eval()
+    try:
+        with torch.inference_mode():
+            kwargs = {"input_ids": batch["input_ids"].to(device)}
+            if "attention_mask" in batch:
+                kwargs["attention_mask"] = batch["attention_mask"].to(device)
+            model(**kwargs)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    return records
 
 
 def run_variant(cfg, variant, tokenizer, datasets, baseline_perplexity=None, checkpoint_dir=None):
@@ -199,6 +302,7 @@ def run_variant(cfg, variant, tokenizer, datasets, baseline_perplexity=None, che
         "seed": cfg.seed,
         "base_weight_fingerprint": base_fingerprint,
         "replacement_records": [record.__dict__ for record in replacements],
+        "trainable_parameter_names": trainable_parameter_names(model),
         **count_parameters(model),
     }
 
@@ -220,6 +324,11 @@ def run_variant(cfg, variant, tokenizer, datasets, baseline_perplexity=None, che
         baseline_perplexity,
     )
     result.update(downstream_accuracy(model, downstream_loader, device, max_batches=2 if cfg.smoke else None))
+    try:
+        diagnostic_batch = next(iter(eval_loader))
+        result["activation_layer_diagnostics"] = activation_layer_diagnostics(model, diagnostic_batch, device)
+    except StopIteration:
+        result["activation_layer_diagnostics"] = []
 
     generations = generation_outputs(
         model,
