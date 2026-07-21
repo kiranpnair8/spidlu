@@ -98,12 +98,28 @@ def _spidlu_activation(cfg):
 def _replacement_for(variant, original, cfg):
     if variant == Variant.SPIDLU:
         spidlu = _spidlu_activation(cfg)
-        if get_config_value(cfg, "spidlu_function_preserving", False):
+        if get_config_value(cfg, "spidlu_function_preserving", True):
+            alpha_mode = get_config_value(cfg, "spidlu_alpha_mode", "trainable")
+            alpha_max = get_config_value(cfg, "spidlu_alpha_max", 0.1)
+            if alpha_max >= 1.0:
+                raise ValueError("spidlu_alpha_max must be less than 1.0; direct alpha=1 jumps are disabled.")
+            blend_alpha = 0.0
+            trainable = alpha_mode == "trainable"
+            if alpha_mode == "fixed":
+                blend_alpha = get_config_value(cfg, "spidlu_fixed_alpha", 0.0)
+                if blend_alpha > alpha_max:
+                    raise ValueError("spidlu_fixed_alpha cannot exceed spidlu_alpha_max.")
+            elif alpha_mode == "linear_warmup":
+                blend_alpha = 0.0
+            elif alpha_mode != "trainable":
+                raise ValueError("spidlu_alpha_mode must be trainable, fixed, or linear_warmup.")
             return BlendedActivation(
                 _clone_original_activation(original),
                 spidlu,
-                blend_alpha=get_config_value(cfg, "spidlu_blend_alpha", 0.0),
-                trainable=get_config_value(cfg, "spidlu_blend_trainable", False),
+                blend_alpha=blend_alpha,
+                trainable=trainable,
+                alpha_max=alpha_max,
+                alpha_mode=alpha_mode,
             )
         return spidlu
     if variant == Variant.QUANTIZED_ACTIVATION:
@@ -167,3 +183,16 @@ def apply_activation_surgery(model, variant, cfg):
     if not records:
         raise ValueError("No activation replacements were applied.")
     return records
+
+
+def freeze_pretrained_for_activation_only(model, variant):
+    """Freeze pretrained weights before activation-only surgery is applied."""
+    variant = Variant(variant)
+    if variant not in (Variant.SPIDLU, Variant.QUANTIZED_ACTIVATION):
+        return
+    for param in model.parameters():
+        param.requires_grad = False
+
+
+def trainable_parameter_names(model):
+    return [name for name, param in model.named_parameters() if param.requires_grad]
