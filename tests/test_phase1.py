@@ -10,7 +10,12 @@ from spidlu.eval import causal_lm_nll_from_logits, compare_hf_loss, downstream_a
 from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
 from spidlu.metrics import count_parameters
 from spidlu.phase1 import TRAINED_VARIANTS, build_run_context, state_fingerprint
-from spidlu.surgery import Variant, apply_activation_surgery
+from spidlu.surgery import (
+    Variant,
+    apply_activation_surgery,
+    freeze_pretrained_for_activation_only,
+    trainable_parameter_names,
+)
 from spidlu.train import train_variant
 
 
@@ -194,11 +199,22 @@ def test_feasibility_trained_variants_share_reduced_budget():
     assert "ann_original" not in {variant.value for variant in TRAINED_VARIANTS}
 
 
+def test_corrected_feasibility_uses_function_preserving_low_alpha():
+    config = load_config(Path("configs") / "phase1_rq1_corrected_feasibility.yaml")
+    assert config.output_dir == "models/phase1_rq1_activation_feasibility"
+    assert config.spidlu_function_preserving is True
+    assert config.spidlu_alpha_mode == "linear_warmup"
+    assert config.spidlu_alpha_max == 0.1
+    assert config.spidlu_warmup_steps == 8
+    assert config.max_train_steps == 8
+
+
 def test_spidlu_replaces_gated_activation_location():
     model = FakeCausalLM()
     records = apply_activation_surgery(model, Variant.SPIDLU, cfg())
     assert records
-    assert isinstance(model.model.layers[0].mlp.act_fn, SpiDLU)
+    assert isinstance(model.model.layers[0].mlp.act_fn, BlendedActivation)
+    assert isinstance(model.model.layers[0].mlp.act_fn.replacement_activation, SpiDLU)
     assert records[0].semantic_location == "down_proj(act_fn(gate_proj(x)) * up_proj(x))"
 
 
@@ -237,8 +253,19 @@ def test_one_layer_surgery_changes_only_requested_module():
     )
     records = apply_activation_surgery(model, Variant.SPIDLU, scoped_cfg)
     assert [record.layer_index for record in records] == [2]
-    assert isinstance(model.model.layers[2].mlp.act_fn, SpiDLU)
+    assert isinstance(model.model.layers[2].mlp.act_fn, BlendedActivation)
     assert all(isinstance(model.model.layers[idx].mlp.act_fn, nn.SiLU) for idx in (0, 1, 3))
+
+
+def test_activation_only_variants_freeze_pretrained_weights():
+    model = FakeCausalLM(layers=2)
+    freeze_pretrained_for_activation_only(model, Variant.SPIDLU)
+    records = apply_activation_surgery(model, Variant.SPIDLU, cfg())
+    assert records
+    names = trainable_parameter_names(model)
+    assert names
+    assert all(name.endswith("blend_alpha") for name in names)
+    assert all(not param.requires_grad for name, param in model.named_parameters() if not name.endswith("blend_alpha"))
 
 
 def test_zero_step_diagnostic_forward_does_not_modify_base_weights():
