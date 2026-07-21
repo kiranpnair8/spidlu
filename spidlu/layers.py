@@ -82,18 +82,40 @@ class BlendedActivation(nn.Module):
     for function-preserving surgery diagnostics and staged alignment.
     """
 
-    def __init__(self, reference_activation, replacement_activation, blend_alpha=0.0, trainable=False):
+    def __init__(
+        self,
+        reference_activation,
+        replacement_activation,
+        blend_alpha=0.0,
+        trainable=False,
+        alpha_max=0.1,
+        alpha_mode="trainable",
+    ):
         super().__init__()
         if not 0.0 <= blend_alpha <= 1.0:
             raise ValueError("blend_alpha must be in [0, 1].")
+        if not 0.0 <= alpha_max < 1.0:
+            raise ValueError("alpha_max must be in [0, 1).")
+        if alpha_mode not in {"trainable", "fixed", "linear_warmup"}:
+            raise ValueError("alpha_mode must be one of: trainable, fixed, linear_warmup.")
         self.reference_activation = reference_activation
         self.replacement_activation = replacement_activation
+        self.alpha_mode = alpha_mode
+        self.alpha_max = float(alpha_max)
         alpha = torch.tensor(float(blend_alpha))
         if trainable:
             self.blend_alpha = nn.Parameter(alpha)
         else:
             self.register_buffer("blend_alpha", alpha)
 
+    def set_alpha(self, value):
+        value = max(0.0, min(float(value), self.alpha_max))
+        with torch.no_grad():
+            self.blend_alpha.copy_(torch.tensor(value, device=self.blend_alpha.device))
+
+    def alpha_value(self):
+        return float(self.blend_alpha.detach().clamp(0.0, self.alpha_max).cpu().item())
+
     def forward(self, x):
-        alpha = self.blend_alpha.clamp(0.0, 1.0)
+        alpha = self.blend_alpha.clamp(0.0, self.alpha_max)
         return (1.0 - alpha) * self.reference_activation(x) + alpha * self.replacement_activation(x)
