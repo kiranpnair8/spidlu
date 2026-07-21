@@ -5,7 +5,7 @@ from enum import Enum
 
 import torch.nn as nn
 
-from spidlu.layers import QuantizedActivationSTE, SpiDLU
+from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
 
 
 class Variant(str, Enum):
@@ -23,6 +23,10 @@ class ReplacementRecord:
     original_type: str
     replacement_type: str
     semantic_location: str
+
+
+def get_config_value(cfg, name, default=None):
+    return getattr(cfg, name, default)
 
 
 def _base_model(model):
@@ -83,13 +87,25 @@ def _clone_original_activation(original):
     return CallableActivation()
 
 
+def _spidlu_activation(cfg):
+    return SpiDLU(
+        alpha=cfg.spidlu_alpha,
+        threshold=cfg.spidlu_threshold,
+        T=cfg.spidlu_T,
+    )
+
+
 def _replacement_for(variant, original, cfg):
     if variant == Variant.SPIDLU:
-        return SpiDLU(
-            alpha=cfg.spidlu_alpha,
-            threshold=cfg.spidlu_threshold,
-            T=cfg.spidlu_T,
-        )
+        spidlu = _spidlu_activation(cfg)
+        if get_config_value(cfg, "spidlu_function_preserving", False):
+            return BlendedActivation(
+                _clone_original_activation(original),
+                spidlu,
+                blend_alpha=get_config_value(cfg, "spidlu_blend_alpha", 0.0),
+                trainable=get_config_value(cfg, "spidlu_blend_trainable", False),
+            )
+        return spidlu
     if variant == Variant.QUANTIZED_ACTIVATION:
         levels = cfg.quantized_levels or (cfg.spidlu_T + 1)
         return QuantizedActivationSTE(
@@ -99,6 +115,24 @@ def _replacement_for(variant, original, cfg):
     raise ValueError(f"Variant {variant} does not replace activations.")
 
 
+def selected_mlp_indices(total_layers, scope="all", layer_index=None, first_n=None):
+    if scope == "all":
+        return set(range(total_layers))
+    if scope == "one":
+        if layer_index is None:
+            raise ValueError("surgery_layer_index is required when surgery_scope='one'.")
+        if layer_index < 0 or layer_index >= total_layers:
+            raise ValueError(f"surgery_layer_index {layer_index} is outside [0, {total_layers - 1}].")
+        return {layer_index}
+    if scope == "first_n":
+        if first_n is None:
+            raise ValueError("surgery_first_n is required when surgery_scope='first_n'.")
+        if first_n < 1:
+            raise ValueError("surgery_first_n must be at least 1.")
+        return set(range(min(first_n, total_layers)))
+    raise ValueError(f"Unknown surgery_scope: {scope}")
+
+
 def apply_activation_surgery(model, variant, cfg):
     """Apply in-place activation replacement and return replacement records."""
     variant = Variant(variant)
@@ -106,7 +140,16 @@ def apply_activation_surgery(model, variant, cfg):
         return []
 
     records = []
-    for idx, path, mlp in iter_transformer_mlps(model):
+    mlps = list(iter_transformer_mlps(model))
+    selected = selected_mlp_indices(
+        len(mlps),
+        scope=get_config_value(cfg, "surgery_scope", "all"),
+        layer_index=get_config_value(cfg, "surgery_layer_index", None),
+        first_n=get_config_value(cfg, "surgery_first_n", None),
+    )
+    for idx, path, mlp in mlps:
+        if idx not in selected:
+            continue
         attr = _activation_attr(mlp)
         original = getattr(mlp, attr)
         replacement = _replacement_for(variant, original, cfg)
