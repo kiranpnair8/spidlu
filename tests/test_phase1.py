@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from scripts.aggregate_phase1 import summarize
+from scripts.aggregate_phase1 import paired_comparisons, publication_table, summarize
 from spidlu.config import load_config
 from spidlu.eval import causal_lm_nll_from_logits, compare_hf_loss, downstream_accuracy, shifted_causal_targets
 from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
@@ -222,6 +222,54 @@ def test_phase1_aggregation_computes_mean_std():
     assert by_key[("ann_original", "perplexity")]["mean"] == 12.0
     assert by_key[("ann_original", "perplexity")]["n"] == 2
     assert by_key[("spidlu", "downstream_accuracy")]["std"] == 0.0
+
+
+def test_phase1_aggregation_computes_paired_comparisons():
+    rows = [
+        {"variant": "ann_original", "seed": 1, "perplexity": 10.0},
+        {"variant": "ann_original", "seed": 2, "perplexity": 12.0},
+        {"variant": "spidlu", "seed": 1, "perplexity": 11.0},
+        {"variant": "spidlu", "seed": 2, "perplexity": 15.0},
+    ]
+    comparisons = paired_comparisons(rows, baselines=("ann_original",))
+    row = next(item for item in comparisons if item["variant"] == "spidlu" and item["metric"] == "perplexity")
+    assert row["n"] == 2
+    assert row["mean_difference"] == 2.0
+    assert row["percent_change_mean"] == 2.0 / 11.0 * 100.0
+    assert row["p_value_method"] in {"paired_t_test_scipy", "paired_t_test_normal_approx"}
+
+
+def test_phase1_publication_table_contains_p_value_column():
+    summary = summarize([
+        {"variant": "ann_original", "seed": 1, "perplexity": 10.0},
+        {"variant": "ann_original", "seed": 2, "perplexity": 12.0},
+        {"variant": "spidlu", "seed": 1, "perplexity": 11.0},
+        {"variant": "spidlu", "seed": 2, "perplexity": 15.0},
+    ])
+    comparisons = paired_comparisons([
+        {"variant": "ann_original", "seed": 1, "perplexity": 10.0},
+        {"variant": "ann_original", "seed": 2, "perplexity": 12.0},
+        {"variant": "spidlu", "seed": 1, "perplexity": 11.0},
+        {"variant": "spidlu", "seed": 2, "perplexity": 15.0},
+    ], baselines=("ann_original",))
+    table = publication_table(summary, comparisons)
+    assert "p-value" in table
+    assert "spidlu" in table
+
+
+def test_publication_config_uses_full_multiseed_budget_defaults():
+    config = load_config(Path("configs") / "phase1_rq1_publication.yaml")
+    assert config.smoke is False
+    assert config.output_dir == "models/phase1_rq1_publication"
+    assert config.max_train_steps == 100
+    assert config.spidlu_warmup_steps == 100
+    assert config.spidlu_alpha_max == 0.1
+    assert config.variants == [
+        "ann_original",
+        "spidlu",
+        "ann_compute_matched",
+        "quantized_activation",
+    ]
 
 
 def test_spidlu_replaces_gated_activation_location():
