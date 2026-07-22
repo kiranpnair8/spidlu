@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from scripts.aggregate_phase1 import summarize
 from spidlu.config import load_config
 from spidlu.eval import causal_lm_nll_from_logits, compare_hf_loss, downstream_accuracy, shifted_causal_targets
 from spidlu.layers import BlendedActivation, QuantizedActivationSTE, SpiDLU
@@ -102,6 +103,7 @@ def cfg():
         weight_decay=0.0,
         max_train_steps=1,
         max_train_tokens=None,
+        save_every_steps=1,
     )
 
 
@@ -209,6 +211,19 @@ def test_corrected_feasibility_uses_function_preserving_low_alpha():
     assert config.max_train_steps == 8
 
 
+def test_phase1_aggregation_computes_mean_std():
+    rows = [
+        {"variant": "ann_original", "perplexity": 10.0, "downstream_accuracy": 0.5},
+        {"variant": "ann_original", "perplexity": 14.0, "downstream_accuracy": 0.7},
+        {"variant": "spidlu", "perplexity": 12.0, "downstream_accuracy": 0.6},
+    ]
+    summary = summarize(rows)
+    by_key = {(row["variant"], row["metric"]): row for row in summary}
+    assert by_key[("ann_original", "perplexity")]["mean"] == 12.0
+    assert by_key[("ann_original", "perplexity")]["n"] == 2
+    assert by_key[("spidlu", "downstream_accuracy")]["std"] == 0.0
+
+
 def test_spidlu_replaces_gated_activation_location():
     model = FakeCausalLM()
     records = apply_activation_surgery(model, Variant.SPIDLU, cfg())
@@ -266,6 +281,35 @@ def test_activation_only_variants_freeze_pretrained_weights():
     assert names
     assert all(name.endswith("blend_alpha") for name in names)
     assert all(not param.requires_grad for name, param in model.named_parameters() if not name.endswith("blend_alpha"))
+
+
+def test_compute_matched_freezes_pretrained_weights():
+    model = FakeCausalLM(layers=2)
+    freeze_pretrained_for_activation_only(model, Variant.ANN_COMPUTE_MATCHED)
+    records = apply_activation_surgery(model, Variant.ANN_COMPUTE_MATCHED, cfg())
+    assert records == []
+    assert trainable_parameter_names(model) == []
+    assert all(not param.requires_grad for param in model.parameters())
+
+
+def test_compute_matched_training_preserves_weights_and_checkpoint(tmp_path):
+    model = FakeCausalLM(layers=2)
+    freeze_pretrained_for_activation_only(model, Variant.ANN_COMPUTE_MATCHED)
+    before = {name: tensor.detach().clone() for name, tensor in model.state_dict().items()}
+    stats = train_variant(model, tiny_loader(), cfg(), torch.device("cpu"), checkpoint_dir=tmp_path)
+    after = model.state_dict()
+    assert stats["optimizer_steps"] == 1
+    assert stats["processed_tokens"] > 0
+    assert stats["checkpoint_path"] is not None
+    checkpoint = torch.load(stats["checkpoint_path"], map_location="cpu")
+    assert checkpoint["optimizer_steps"] == 1
+    assert checkpoint["processed_tokens"] == stats["processed_tokens"]
+    assert "optimizer" not in checkpoint
+    assert "scheduler" not in checkpoint
+    assert all(torch.equal(before[name], after[name]) for name in before)
+    reloaded = FakeCausalLM(layers=2)
+    reloaded.load_state_dict(checkpoint["model"])
+    assert all(torch.equal(after[name], reloaded.state_dict()[name]) for name in after)
 
 
 def test_zero_step_diagnostic_forward_does_not_modify_base_weights():
@@ -358,6 +402,7 @@ def test_all_four_variants_complete_smoke_mode():
         Variant.QUANTIZED_ACTIVATION,
     ]:
         model = FakeCausalLM()
+        freeze_pretrained_for_activation_only(model, variant)
         apply_activation_surgery(model, variant, cfg())
         if variant != Variant.ANN_ORIGINAL:
             stats = train_variant(model, tiny_loader(), cfg(), torch.device("cpu"))
