@@ -64,12 +64,15 @@ def train_variant(model, dataloader, cfg, device, checkpoint_dir=None):
             if optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
             functional.reset_net(model)
-            outputs = model(input_ids=input_ids, labels=labels)
-            loss = outputs.loss
             if optimizer is not None:
+                outputs = model(input_ids=input_ids, labels=labels)
+                loss = outputs.loss
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
+            else:
+                with torch.inference_mode():
+                    model(input_ids=input_ids, labels=labels)
             processed_tokens += labels.numel()
             optimizer_steps += 1
             set_linear_warmup_alpha(model, cfg, optimizer_steps)
