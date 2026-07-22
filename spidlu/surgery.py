@@ -186,9 +186,9 @@ def apply_activation_surgery(model, variant, cfg):
 
 
 def freeze_pretrained_for_activation_only(model, variant):
-    """Freeze pretrained weights before activation-only surgery is applied."""
+    """Freeze pretrained weights for activation-only and compute-matched controls."""
     variant = Variant(variant)
-    if variant not in (Variant.SPIDLU, Variant.QUANTIZED_ACTIVATION):
+    if variant not in (Variant.SPIDLU, Variant.QUANTIZED_ACTIVATION, Variant.ANN_COMPUTE_MATCHED):
         return
     for param in model.parameters():
         param.requires_grad = False
