@@ -17,7 +17,14 @@ from spidlu.surgery import (
     freeze_pretrained_for_activation_only,
     trainable_parameter_names,
 )
-from spidlu.train import train_variant
+from spidlu.train import (
+    changed_trainable_parameters,
+    clamp_trainable_blend_alphas,
+    gradient_norms,
+    optimizer_parameter_group_summary,
+    train_variant,
+    trainable_parameter_snapshot,
+)
 
 
 class FakeGatedMLP(nn.Module):
@@ -104,6 +111,7 @@ def cfg():
         max_train_steps=1,
         max_train_tokens=None,
         save_every_steps=1,
+        spidlu_alpha_max=0.1,
     )
 
 
@@ -205,7 +213,7 @@ def test_corrected_feasibility_uses_function_preserving_low_alpha():
     config = load_config(Path("configs") / "phase1_rq1_corrected_feasibility.yaml")
     assert config.output_dir == "models/phase1_rq1_activation_feasibility"
     assert config.spidlu_function_preserving is True
-    assert config.spidlu_alpha_mode == "linear_warmup"
+    assert config.spidlu_alpha_mode == "trainable"
     assert config.spidlu_alpha_max == 0.1
     assert config.spidlu_warmup_steps == 8
     assert config.max_train_steps == 8
@@ -262,6 +270,7 @@ def test_publication_config_uses_full_multiseed_budget_defaults():
     assert config.smoke is False
     assert config.output_dir == "models/phase1_rq1_publication"
     assert config.max_train_steps == 100
+    assert config.spidlu_alpha_mode == "trainable"
     assert config.spidlu_warmup_steps == 100
     assert config.spidlu_alpha_max == 0.1
     assert config.variants == [
@@ -329,6 +338,37 @@ def test_activation_only_variants_freeze_pretrained_weights():
     assert names
     assert all(name.endswith("blend_alpha") for name in names)
     assert all(not param.requires_grad for name, param in model.named_parameters() if not name.endswith("blend_alpha"))
+
+
+def test_spidlu_trainable_alpha_receives_gradients_and_updates():
+    torch.manual_seed(123)
+    model = FakeCausalLM(layers=2)
+    freeze_pretrained_for_activation_only(model, Variant.SPIDLU)
+    apply_activation_surgery(model, Variant.SPIDLU, cfg())
+    names = trainable_parameter_names(model)
+    assert names == [
+        "model.layers.0.mlp.act_fn.blend_alpha",
+        "model.layers.1.mlp.act_fn.blend_alpha",
+    ]
+    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_params, lr=1e-3, weight_decay=0.0)
+    group_summary = optimizer_parameter_group_summary(optimizer)
+    assert group_summary == [{"group_index": 0, "parameter_count": 2, "element_count": 2, "lr": 1e-3, "weight_decay": 0.0}]
+    before = trainable_parameter_snapshot(model)
+    batch = next(iter(tiny_loader()))
+    optimizer.zero_grad(set_to_none=True)
+    output = model(batch["input_ids"], labels=batch["labels"])
+    alpha_regularizer = sum(param for _, param in model.named_parameters() if param.requires_grad)
+    loss = output.loss - alpha_regularizer
+    loss.backward()
+    norms = gradient_norms(model)
+    assert set(norms) == set(names)
+    assert all(value is not None and value > 0 for value in norms.values())
+    optimizer.step()
+    clamp_trainable_blend_alphas(model)
+    changed = changed_trainable_parameters(model, before)
+    assert all(changed.values())
+    assert all(0.0 <= param.item() <= cfg().spidlu_alpha_max for _, param in model.named_parameters() if param.requires_grad)
 
 
 def test_compute_matched_freezes_pretrained_weights():
