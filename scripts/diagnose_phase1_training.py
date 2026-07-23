@@ -3,31 +3,17 @@ import json
 import sys
 from pathlib import Path
 
-import torch
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from spidlu.config import load_config
-from spidlu.data import load_tokenizer, make_dataloader, make_lm_datasets
-from spidlu.layers import BlendedActivation
-from spidlu.phase1 import build_variant_model
-from spidlu.seed import set_seed
-from spidlu.surgery import Variant, trainable_parameter_names
-from spidlu.train import (
-    clamp_trainable_blend_alphas,
-    changed_trainable_parameters,
-    gradient_norms,
-    optimizer_parameter_group_summary,
-    trainable_parameter_snapshot,
-)
+VARIANT_CHOICES = ("ann_original", "spidlu", "ann_compute_matched", "quantized_activation")
 
 
-def activation_alpha_values(model):
+def activation_alpha_values(model, blended_activation_cls):
     values = {}
     for name, module in model.named_modules():
-        if isinstance(module, BlendedActivation):
+        if isinstance(module, blended_activation_cls):
             values[name] = {
                 "raw": float(module.blend_alpha.detach().cpu().item()),
                 "effective": module.alpha_value(),
@@ -41,10 +27,26 @@ def activation_alpha_values(model):
 def main():
     parser = argparse.ArgumentParser(description="Diagnose whether a Phase 1 variant has trainable parameters and gradients.")
     parser.add_argument("--config", default="configs/phase1_rq1_publication.yaml")
-    parser.add_argument("--variant", default="spidlu", choices=[variant.value for variant in Variant])
+    parser.add_argument("--variant", default="spidlu", choices=VARIANT_CHOICES)
     parser.add_argument("--seed", type=int, help="Override configured seed.")
     parser.add_argument("--output", help="Optional JSON output path.")
     args = parser.parse_args()
+
+    import torch
+
+    from spidlu.config import load_config
+    from spidlu.data import load_tokenizer, make_dataloader, make_lm_datasets
+    from spidlu.layers import BlendedActivation
+    from spidlu.phase1 import build_variant_model
+    from spidlu.seed import set_seed
+    from spidlu.surgery import trainable_parameter_names
+    from spidlu.train import (
+        clamp_trainable_blend_alphas,
+        changed_trainable_parameters,
+        gradient_norms,
+        optimizer_parameter_group_summary,
+        trainable_parameter_snapshot,
+    )
 
     cfg = load_config(args.config)
     if args.seed is not None:
@@ -65,7 +67,7 @@ def main():
         optimizer = torch.optim.AdamW(trainable_params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
 
     before = trainable_parameter_snapshot(model)
-    alpha_before = activation_alpha_values(model)
+    alpha_before = activation_alpha_values(model, BlendedActivation)
 
     input_ids = batch["input_ids"].to(device)
     labels = batch.get("labels", batch["input_ids"]).to(device)
@@ -81,7 +83,7 @@ def main():
         clamp_trainable_blend_alphas(model)
     else:
         norms = {}
-    alpha_after = activation_alpha_values(model)
+    alpha_after = activation_alpha_values(model, BlendedActivation)
     changed = changed_trainable_parameters(model, before)
 
     payload = {
