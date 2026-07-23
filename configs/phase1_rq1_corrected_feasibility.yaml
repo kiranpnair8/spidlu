@@ -32,7 +32,7 @@ spidlu:
   threshold: 1.0
   T_steps: 4
   spidlu_function_preserving: true
-  spidlu_alpha_mode: "linear_warmup"
+  spidlu_alpha_mode: "trainable"
   spidlu_alpha_max: 0.1
   spidlu_fixed_alpha: 0.0
   spidlu_warmup_steps: 8
