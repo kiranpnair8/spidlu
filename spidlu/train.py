@@ -24,6 +24,51 @@ def blended_activation_modules(model):
             yield module
 
 
+def clamp_trainable_blend_alphas(model):
+    for module in blended_activation_modules(model):
+        if isinstance(module.blend_alpha, torch.nn.Parameter):
+            module.set_alpha(module.blend_alpha.detach().item())
+
+
+def trainable_parameter_snapshot(model):
+    return {
+        name: param.detach().clone()
+        for name, param in model.named_parameters()
+        if param.requires_grad
+    }
+
+
+def gradient_norms(model):
+    norms = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            norms[name] = None if param.grad is None else float(param.grad.detach().norm().cpu().item())
+    return norms
+
+
+def changed_trainable_parameters(model, before):
+    changed = {}
+    for name, param in model.named_parameters():
+        if name in before:
+            changed[name] = not torch.equal(before[name], param.detach())
+    return changed
+
+
+def optimizer_parameter_group_summary(optimizer):
+    if optimizer is None:
+        return []
+    return [
+        {
+            "group_index": idx,
+            "parameter_count": len(group["params"]),
+            "element_count": sum(param.numel() for param in group["params"]),
+            "lr": group.get("lr"),
+            "weight_decay": group.get("weight_decay"),
+        }
+        for idx, group in enumerate(optimizer.param_groups)
+    ]
+
+
 def set_linear_warmup_alpha(model, cfg, optimizer_steps):
     alpha_mode = getattr(cfg, "spidlu_alpha_mode", "trainable")
     if alpha_mode != "linear_warmup":
@@ -69,6 +114,7 @@ def train_variant(model, dataloader, cfg, device, checkpoint_dir=None):
                 loss = outputs.loss
                 loss.backward()
                 optimizer.step()
+                clamp_trainable_blend_alphas(model)
                 scheduler.step()
             else:
                 with torch.inference_mode():
